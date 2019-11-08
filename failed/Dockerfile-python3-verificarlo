@@ -1,0 +1,30 @@
+FROM verificarlo/verificarlo
+
+# Remove Python 3.4 because numpy requires 3.5
+RUN apt-get update && apt-get remove -y python3 python3.4-minimal
+
+RUN apt install -y python3.5 python3.5-dev curl git wget unzip &&\
+    curl https://bootstrap.pypa.io/get-pip.py -o get-pip.py &&\
+    python3.5 get-pip.py &&\
+    pip3 install -U --user six numpy wheel setuptools mock &&\
+    pip3 install -U --user keras_applications==1.0.6 --no-deps &&\
+    pip3 install -U --user keras_preprocessing==1.0.5 --no-deps
+
+RUN wget https://github.com/bazelbuild/bazel/releases/download/0.26.1/bazel-0.26.1-installer-linux-x86_64.sh &&\
+    chmod +x bazel-0.26.1-installer-linux-x86_64.sh &&\
+    ./bazel-0.26.1-installer-linux-x86_64.sh
+
+
+# Setting compilers and linkers to use verificarlo
+# # ... When compiling C, use exclusion file
+ENV CC "verificarlo"
+ENV CXX "verificarlo"
+ENV FC "verificarlo"
+ENV LD "verificarlo"
+ENV LDSHARED "verificarlo -shared"
+
+RUN git clone https://github.com/tensorflow/tensorflow.git && cd tensorflow && git checkout v2.0.0 && ./configure &&\
+    ln -s /usr/bin/python3 /usr/bin/python && pip3 install future &&  bazel build //tensorflow/tools/pip_package:build_pip_package &&\
+    ./bazel-bin/tensorflow/tools/pip_package/build_pip_package /tmp/tensorflow_pkg
+
+

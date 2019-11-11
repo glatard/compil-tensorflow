@@ -1,6 +1,7 @@
-FROM ubuntu:latest
+FROM ubuntu:latest # Should fix tag
 RUN apt-get update
 ENV DEBIAN_FRONTEND=noninteractive 
+# Package list should be fixed, see tensorflow container
 RUN apt install -y bash ca-certificates make git libmpfr-dev \
     clang llvm-4.0 llvm-4.0-dev  gcc g++ autoconf automake libedit-dev libtool\
     libz-dev python3 python3-numpy python3-matplotlib binutils vim

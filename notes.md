@@ -1,3 +1,5 @@
+# Kickstart notes
+
 https://machinelearningmastery.com/reproducible-results-neural-networks-keras/
 
 Tutorial: https://colab.research.google.com/github/tensorflow/docs/blob/master/site/en/tutorials/quickstart/beginner.ipynb#scrollTo=T4JfEh7kvx6m
@@ -35,3 +37,50 @@ $ grep accuracy log.log | grep -v sample
 10000/1 - 1s - loss: 0.0370 - accuracy: 0.9790
 
 stdev is 0.001017427095539
+
+# week of Nov 4
+
+Tried to build tensorflow in the verificarlo container:
+Dockerfile-python3-verificarlo. Didn't work because verificarlo is built
+from ubuntu 14.
+
+Instead, built verificarlo on ubuntu:latest: Dockerfile-verificarlo -->
+image name verificarlo-ubuntu18. Version should be fixed instead of depending on latest.
+
+It should be possible to build tensorflow from Dockerfile-verificarlo -->
+trying in Dockerfile-tensorflow+verificarlo. Success, tagged in
+tensorflow-verificarlo
+
+
+# Nov 11, 2019
+
+Now trying to compile tensorflow with verificarlo.
+
+verificarlo -xc -E -v - -w
+
+Override verificarlo with verificarlo -w (bash scipt)
+in this script, export VFC_BACKENDS="libinterflop_ieee.so"
+
+remove llvm6.0, clang6.0
+   37  apt remove llvm-6.0
+   39  apt remove libllvm-6.0 llvm-6.0-runtime
+   41  apt remove llvm-6.0-runtime
+   43  apt remove libllvm-6.0
+   44  apt remove libllvm6.0
+
+install clang4.0
+   49  apt install clang-4.0
+   51  ln -s /usr/bin/clang-4.0 /usr/bin/clang
+
+
+
+
+run fix_toolchain.sh (fixt it first)
+
+some programs are still complaining that VFC_BACKENDS isn't defined.
+add VFC_BACKENDS to ENV?
+
+
+
+
+    

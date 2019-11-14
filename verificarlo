@@ -1,0 +1,251 @@
+#!/usr/bin/env python3
+#*******************************************************************************
+#                                                                              *
+#  This file is part of Verificarlo.                                           *
+#                                                                              *
+#  Copyright (c) 2015-2019                                                     *
+#     Verificarlo contributors                                                 *
+#     Universite de Versailles St-Quentin-en-Yvelines                          *
+#     CMLA, Ecole Normale Superieure de Cachan                                 *
+#                                                                              *
+#  Verificarlo is free software: you can redistribute it and/or modify         *
+#  it under the terms of the GNU General Public License as published by        *
+#  the Free Software Foundation, either version 3 of the License, or           *
+#  (at your option) any later version.                                         *
+#                                                                              *
+#  Verificarlo is distributed in the hope that it will be useful,              *
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of              *
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the               *
+#  GNU General Public License for more details.                                *
+#                                                                              *
+#  You should have received a copy of the GNU General Public License           *
+#  along with Verificarlo.  If not, see <http://www.gnu.org/licenses/>.        *
+#                                                                              *
+#*******************************************************************************
+
+from __future__ import print_function
+
+import argparse
+import os
+import sys
+import subprocess
+import tempfile
+
+PACKAGE_STRING = "verificarlo 0.2.3"
+LIBDIR = "/usr/local/lib"
+PROJECT_ROOT = os.path.dirname(os.path.realpath(__file__))
+libvfcinstrument = LIBDIR + '/libvfcinstrument.so'
+mcalib_options = "-rpath {0} -L {0}".format(LIBDIR)
+mcalib_includes = PROJECT_ROOT + "/../include/"
+vfcwrapper = mcalib_includes + 'vfcwrapper.c'
+llvm_bindir = "/usr/lib/llvm-4.0/bin"
+clang = '/usr/bin/clang'
+opt = llvm_bindir + '/opt'
+dragonegg = ""
+gcc = "gcc-7"
+FORTRAN_EXTENSIONS = [".f", ".f90", ".f77"]
+C_CPP_EXTENSIONS = [".c", ".cpp", ".cc", ".cxx"]
+C_EXTENSIONS = [".c"]
+
+class NoPrefixParser(argparse.ArgumentParser):
+    # ignore prefix autocompletion of options
+    def _get_option_tuples(self, option_string):
+        return []
+
+
+def fail(msg):
+    print(sys.argv[0] + ': ' + msg, file=sys.stderr)
+    sys.exit(1)
+
+
+def is_fortran(name):
+    return os.path.splitext(name)[1].lower() in FORTRAN_EXTENSIONS
+
+
+def is_c_or_cpp(name):
+    return os.path.splitext(name)[1].lower() in C_CPP_EXTENSIONS
+
+def is_c(name):
+    return os.path.splitext(name)[1].lower() in C_EXTENSIONS
+
+def shell_escape(argument):
+    # prevents argument expansion in shell call
+    return "'" + argument + "'"
+
+def parse_extra_args(args):
+    sources = []
+    options = []
+
+    for a in args:
+        # These arguments break Tensorflow compilation
+        # -fno-canonical-system-headers isn't supported by clang 4
+        #if a == '-std=c++11' or a == '-fno-canonical-system-headers':
+        if a == '-fno-canonical-system-headers':
+            continue
+        if is_fortran(a):
+            if not dragonegg:
+                fail("fortran not supported. "
+                     + "--without-fortran was used during configuration.")
+            sources.append(a)
+        elif is_c_or_cpp(a):
+            sources.append(a)
+        else:
+            options.append(shell_escape(a))
+
+    # verificarlo -xc -E -v - dumps a lot of warnings that break Tensorflow's compilation
+    options.append('-w')
+#    options.append('-I/tensorflow/tensorflow/core/platform')
+#    options.append('-I/tensorflow')
+ #   options.append('-I/usr/include/c++/7/ext')
+ #   options.append('-I/usr/include/c++/7')
+ #   options.append('-I/usr/include/x86_64-linux-gnu/c++/7')
+
+    has_c = False
+    for s in sources:
+      if is_c(s):
+        has_c = True
+    if '-std=c++11' in options or "'-std=c++11'" in options: # and has_c:
+        #print("Removing option '-std=c++11' from compilation options since sources have C files")
+        #options = [x for x in options if x!='-std=c++11']
+        options = ['-x', 'c++' ] + options
+    print("OPTIONS: {}".format(options))
+    return sources, ' '.join(options)
+
+
+def shell(cmd):
+    try:
+        subprocess.check_call(cmd, shell=True)
+    except subprocess.CalledProcessError:
+        fail('command failed:\n' + cmd)
+
+
+def linker_mode(sources, options, output, args):
+    extra_args = "-static " if args.static else "-fPIC "
+    extra_args += "-DINST_FCMP " if args.inst_fcmp else ""
+    extra_args += "-DDDEBUG " if args.ddebug else ""
+    shell('{clang} -c -O3 {extra_args} -o .vfcwrapper.o {vfcwrapper} -I {mcalib_includes}'.format(
+        clang=clang,
+        extra_args=extra_args,
+        vfcwrapper=vfcwrapper,
+        mcalib_includes=mcalib_includes))
+
+    # Only include lgfortran if fortran support is enabled
+    gfortran = "-lgfortran" if dragonegg else ""
+
+    f = tempfile.NamedTemporaryFile(mode='w+')
+    if args.static:
+        f.write('{output} {sources} {options} -static .vfcwrapper.o -lmpfr -lgmp {gfortran} -lm -ldl'.format(
+            output=output,
+            sources=' '.join([os.path.splitext(s)[0]+'.o' for s in sources]),
+            options=options,
+            gfortran=gfortran))
+    else:
+        f.write('{output} {sources} {options} .vfcwrapper.o {mcalib_options} {gfortran} -ldl'.format(
+            output=output,
+            sources=' '.join([os.path.splitext(s)[0]+'.o' for s in sources]),
+            options=options,
+            mcalib_options=mcalib_options,
+            gfortran=gfortran))
+
+    f.flush()
+    shell('{clang} @{temp}'.format(clang=clang, temp=f.name))
+    f.close()
+
+
+def compiler_mode(sources, options, output, args):
+    for source in sources:
+        basename = os.path.splitext(source)[0]
+        ir = basename + '.1.ll'
+        ins = basename + '.2.ll'
+
+        # Compile to ir (fortran uses gcc+dragonegg, c uses clang)
+        if is_fortran(source):
+            shell('{gcc} -c -S {source} {options} -fplugin={dragonegg} -fplugin-arg-dragonegg-emit-ir -o {ir}'.format(
+                gcc=gcc,
+                source=source,
+                options=options,
+                dragonegg=dragonegg,
+                ir=ir))
+        else:
+            # shell('{clang} -c -S {source} -emit-llvm {options} -o {ir}'.format(
+            shell('{clang} {options} -c -S {source} -emit-llvm -o {ir}'.format(
+                clang=clang,
+                source=source,
+                options=options,
+                ir=ir
+            ))
+
+        selectfunction = ""
+        if args.function:
+            selectfunction = "-vfclibinst-function " + args.function
+        else:
+            if args.include_file:
+                selectfunction = "-vfclibinst-include-file " + args.include_file
+            if args.exclude_file:
+                selectfunction += " -vfclibinst-exclude-file " + args.exclude_file
+
+        extra_args = ""
+
+        # Activate verbose mode
+        if args.verbose:
+            extra_args += "-vfclibinst-verbose "
+
+        # Activate fcmp instrumentation
+        if args.inst_fcmp:
+            extra_args += "-vfclibinst-inst-fcmp "
+
+        # Apply MCA instrumentation pass
+        shell('{opt} -S  -load {libvfcinstrument} -vfclibinst {extra_args} {selectfunction} {ir} -o {ins}'.format(
+            opt=opt,
+            libvfcinstrument=libvfcinstrument,
+            selectfunction=selectfunction,
+            extra_args=extra_args,
+            ir=ir,
+            ins=ins
+            ))
+
+        if not output:
+            output = '-o ' + basename + '.o'
+        # Produce object file
+        shell('{clang} -c {output} {ins} {options}'.format(
+            clang=clang,
+            output=output,
+            ins=ins,
+            options=options))
+
+
+if __name__ == "__main__":
+    print("VERIFICARLO: {}".format(sys.argv))
+    parser = NoPrefixParser(description='Compiles a program replacing floating point operation with calls to the mcalib (Montecarlo Arithmetic).')
+    parser.add_argument('-c', action='store_true', help='only run preprocess, compile, and assemble steps')
+    parser.add_argument('-o', metavar='file', help='write output to <file>')
+    parser.add_argument('--ddebug', action='store_true', help='enable delta-debug mode')
+    parser.add_argument('--function', metavar='function', help='only instrument <function>')
+    parser.add_argument('--include-file', metavar='file', help='white-list module and functions')
+    parser.add_argument('--exclude-file', metavar='file', help='black-list module and functions')
+    parser.add_argument('-static', '--static', action='store_true', help='produce a static binary')
+    parser.add_argument('--verbose', action='store_true', help='verbose output')
+    parser.add_argument('--inst-fcmp', action='store_true', help='instrument floating point comparisons')
+    parser.add_argument('--version', action='version', version=PACKAGE_STRING)
+    args, other = parser.parse_known_args()
+
+    sources, llvm_options = parse_extra_args(other)
+
+    # check input files
+    if len(sources) > 1 and args.o:
+        fail('cannot specify -o when generating multiple output files')
+
+    # check mutually excluding args
+    if args.function and (args.include_file or args.exclude_file):
+        fail('Cannot use --function and --include-file/--exclude-file together')
+
+    output = "-o " + args.o if args.o else ""
+    if args.c:
+        if len(sources) == 0:
+            fail('no input files')
+        compiler_mode(sources, llvm_options, output, args)
+    else:
+        if len(sources) == 0 and len(llvm_options) == 0:
+            fail('no input files')
+        compiler_mode(sources, llvm_options, "", args)
+        linker_mode(sources, llvm_options, output, args)
